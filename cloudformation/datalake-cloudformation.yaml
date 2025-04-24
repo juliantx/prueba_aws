@@ -32,6 +32,7 @@ Resources:
               Service:
                 - glue.amazonaws.com
                 - events.amazonaws.com
+                - states.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: GlueS3Access
