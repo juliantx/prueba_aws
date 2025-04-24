@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Data Lake with Glue Jobs, Crawlers, and Scheduled Crawler Updates
+
+Resources:
+
+  ## S3 Buckets
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: datalake-raw-bucket-pragma-prueba-btg
+
+  StageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: datalake-stage-bucket-pragma-prueba-btg
+
+  AnalyticsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: datalake-analytics-bucket-pragma-prueba-btg
+
+
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: glue-service-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+                - events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: GlueS3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - arn:aws:s3:::datalake-raw-bucket-pragma-prueba-btg
+                  - arn:aws:s3:::datalake-stage-bucket-pragma-prueba-btg
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - arn:aws:s3:::datalake-raw-bucket-pragma-prueba-btg/*
+                  - arn:aws:s3:::datalake-stage-bucket-pragma-prueba-btg/*
+              - Effect: Allow
+                Action:
+                  - glue:*
+                Resource: '*'
+
+  DatalakeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: datalake-db
+
+  ProveedoresJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: proveedores-job
+      Role: !GetAtt GlueServiceRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://datalake-raw-bucket-pragma-prueba-btg/scripts/proveedores_etl.py
+        PythonVersion: 3
+      GlueVersion: '4.0'
+      NumberOfWorkers: 2
+      WorkerType: G.1X
+
+  ClientesJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: clientes-job
+      Role: !GetAtt GlueServiceRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://datalake-raw-bucket-pragma-prueba-btg/scripts/clientes_etl.py
+        PythonVersion: 3
+      GlueVersion: '4.0'
+      NumberOfWorkers: 2
+      WorkerType: G.1X
+
+  TransaccionesJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: transacciones-job
+      Role: !GetAtt GlueServiceRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: s3://datalake-raw-bucket-pragma-prueba-btg/scripts/transacciones_etl.py
+        PythonVersion: 3
+      GlueVersion: '4.0'
+      NumberOfWorkers: 2
+      WorkerType: G.1X
+
+  ProveedoresCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: proveedores-crawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: datalake-db
+      Targets:
+        S3Targets:
+          - Path: s3://datalake-raw-bucket-pragma-prueba-btg/proveedores/
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"Grouping":{"TableGroupingPolicy":"CombineCompatibleSchemas"}}'
+
+  ClientesCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: clientes-crawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: datalake-db
+      Targets:
+        S3Targets:
+          - Path: s3://datalake-raw-bucket-pragma-prueba-btg/clientes/
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"Grouping":{"TableGroupingPolicy":"CombineCompatibleSchemas"}}'
+
+  TransaccionesCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: transacciones-crawler
+      Role: !GetAtt GlueServiceRole.Arn
+      DatabaseName: datalake-db
+      Targets:
+        S3Targets:
+          - Path: s3://datalake-raw-bucket-pragma-prueba-btg/transacciones/
+      SchemaChangePolicy:
+        UpdateBehavior: UPDATE_IN_DATABASE
+        DeleteBehavior: DEPRECATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"Grouping":{"TableGroupingPolicy":"CombineCompatibleSchemas"}}'
+
+  GlueCrawlersStepFunction:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: RunGlueCrawlers
+      RoleArn: !GetAtt GlueServiceRole.Arn
+      DefinitionString: |
+        {
+          "Comment": "Start Glue Crawlers using Step Functions",
+          "StartAt": "StartProveedoresCrawler",
+          "States": {
+            "StartProveedoresCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "proveedores-crawler"
+              },
+              "Next": "StartClientesCrawler"
+            },
+            "StartClientesCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "clientes-crawler"
+              },
+              "Next": "StartTransaccionesCrawler"
+            },
+            "StartTransaccionesCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "transacciones-crawler"
+              },
+              "End": true
+            }
+          }
+        }
+
+  EventBridgeStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: EventBridgeStepFunctionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStepFunctionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: arn:aws:states:us-east-1:714647503442:stateMachine:RunGlueCrawlers
+
+  RunGlueCrawlersEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: RunGlueCrawlersRule
+      ScheduleExpression: "cron(0 6 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: arn:aws:states:us-east-1:714647503442:stateMachine:RunGlueCrawlers
+          Id: RunGlueCrawlersTarget
+          RoleArn: !GetAtt EventBridgeStepFunctionRole.Arn
